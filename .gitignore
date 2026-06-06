@@ -1,0 +1,19 @@
+outputs/
+.venv/
+
+# Windows / shell redirect artifacts — never commit these
+nul
+%temp%/
+venv/
+env/
+.conda/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.cache/
+.huggingface/
+.modal/
+.idea/
+.vscode/
+*.log

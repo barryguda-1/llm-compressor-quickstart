@@ -1,0 +1,22 @@
+name: llm-compressor-quickstart
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip>=24.0
+  - pytorch>=2.4
+  - pytorch-cuda=12.4
+  - transformers>=4.45.0
+  - tokenizers>=0.20.0
+  - sentencepiece
+  - accelerate>=1.0.0
+  - safetensors
+  - numpy>=2.0,<3
+  - pip:
+      - llmcompressor==0.11.0
+      - compressed-tensors==0.16.0
+      - modal==1.4.3
+# vLLM is intentionally NOT installed locally: no Windows wheels and it
+# hard-pins `compressed-tensors` to a version incompatible with llmcompressor.
+# Inference runs inside the Modal container instead (see modal_inference.py).

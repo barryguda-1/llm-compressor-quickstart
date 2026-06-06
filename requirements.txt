@@ -1,0 +1,16 @@
+# Conda environment is the recommended setup. See environment.yml.
+# This file is kept as a fallback for pip-only users.
+#
+# vLLM is intentionally NOT installed locally. It has no Windows wheels and
+# hard-pins `compressed-tensors` to a version incompatible with llmcompressor.
+# Inference runs inside the Modal container instead (see modal_inference.py,
+# where the image pip-installs vllm on an H100). The local `inference.py` will
+# not run without vLLM, so prefer modal_inference.py.
+
+llmcompressor==0.11.0
+compressed-tensors==0.16.0
+transformers>=4.45.0
+accelerate>=1.0.0
+safetensors
+sentencepiece
+modal==1.4.3
