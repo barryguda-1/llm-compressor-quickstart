@@ -2,6 +2,8 @@
 PYTHON       ?= python
 ENV_NAME     ?= llm-compressor-quickstart
 VOLUME       ?= llm-compressor-results
+MODEL        ?= EssentialAI/rnj-1-instruct
+SCHEME       ?= FP8_DYNAMIC
 
 # ---------------------------------------------------------------------------
 # Help
@@ -46,15 +48,18 @@ quantize: ## Run local FP8 quantization (quantize.py)
 # Modal: quantize on cloud H100
 # ---------------------------------------------------------------------------
 
-.PHONY: modal-token quantize-modal quantize-modal-block
+.PHONY: modal-token quantize-modal quantize-modal-block download-modal
 modal-token: ## Authenticate with Modal (one-time)
 	modal token new
 
-quantize-modal: ## Quantize on Modal H100 (TinyLlama + FP8_DYNAMIC by default)
-	modal run modal_quantize.py
+quantize-modal: ## Quantize on Modal H100: make quantize-modal [MODEL=...] [SCHEME=...]
+	modal run modal_quantize.py --model-id $(MODEL) --scheme $(SCHEME)
 
 quantize-modal-block: ## Quantize on Modal H100 with FP8_BLOCK scheme
-	modal run modal_quantize.py --scheme FP8_BLOCK
+	modal run modal_quantize.py --model-id $(MODEL) --scheme FP8_BLOCK
+
+download-modal: ## Re-download a checkpoint from the volume (no GPU cost): make download-modal [MODEL=...] [SCHEME=...]
+	modal run modal_quantize.py --download-only --model-id $(MODEL) --scheme $(SCHEME)
 
 # ---------------------------------------------------------------------------
 # Modal: inference (vLLM runs in the container, no local GPU needed)
@@ -79,7 +84,7 @@ verify: ## Local HF-only check: generation + weight size (no vLLM; needs GPU)
 	$(PYTHON) scripts/verify.py
 
 verify-modal: ## Verify on Modal: generation + weight-size vs original
-	modal run modal_verify.py --model-name TinyLlama-1.1B-Chat-v1.0-FP8-BLOCK
+	modal run modal_verify.py --model-name rnj-1-instruct-FP8-DYNAMIC
 # ---------------------------------------------------------------------------
 # Modal volume inspection
 # ---------------------------------------------------------------------------

@@ -36,16 +36,16 @@ image = (
 )
 
 app = modal.App(image=image, name="llm-compressor-quickstart-inference")
-
+GPU = "H100"
 @app.function(
     image=image,
-    gpu="L40S",
+    gpu=GPU,
     timeout=10 * 60,
     volumes={"/results": results_vol},
 )
 def generate(
-    prompt: str = "The capital of France is",
-    model_dir: str = "/results/TinyLlama-1.1B-Chat-v1.0-FP8-BLOCK",
+    prompt: str = "Tell me a poem about Nairobi",
+    model_dir: str = "/results/rnj-1-instruct-FP8-DYNAMIC",
     max_tokens: int = 50,
     temperature: float = 0.0,
 ) -> str:
@@ -53,13 +53,13 @@ def generate(
     from vllm import LLM, SamplingParams
 
     print(f"Loading vLLM model from {model_dir}...")
-    llm = LLM(model=model_dir, dtype="auto", enforce_eager=False)
+    llm = LLM(model=model_dir, dtype="auto", enforce_eager=True)
 
     sampling = SamplingParams(temperature=temperature, max_tokens=max_tokens)
     outputs = llm.generate([prompt], sampling)
     return outputs[0].outputs[0].text
 
-@app.function(image=image, gpu="L40S")
+@app.function(image=image, gpu=GPU)
 @modal.web_server(port=8000, startup_timeout=120)
 def serve():
     """Long-lived web endpoint. Hit /generate with JSON: {"prompt": "..."}."""
@@ -70,7 +70,7 @@ def serve():
     from vllm import LLM, SamplingParams
 
     llm = LLM(
-        model="/results/TinyLlama-1.1B-Chat-v1.0-FP8-BLOCK",
+        model="/results/rnj-1-instruct-FP8-DYNAMIC",
         dtype="auto",
     )
 
@@ -100,8 +100,8 @@ def serve():
 
 @app.local_entrypoint()
 def main(
-    prompt: str = "The capital of France is",
-    model_name: str = "TinyLlama-1.1B-Chat-v1.0-FP8-BLOCK",
+    prompt: str = "Share with me a poem about Nairobi",
+    model_name: str = "rnj-1-instruct-FP8-DYNAMIC",
     max_tokens: int = 50,
     serve_mode: bool = False,
 ):
@@ -111,7 +111,7 @@ def main(
         return
 
     remote_model_dir = f"/results/{model_name}"
-    print(f"Running on Modal L40S with prompt: {prompt!r}")
+    print(f"Running on Modal {GPU} with prompt: {prompt!r}")
     output = generate.remote(
         prompt=prompt, model_dir=remote_model_dir, max_tokens=max_tokens
     )

@@ -115,17 +115,32 @@ modal token new     # opens browser to authenticate
 
 ```bash
 make quantize-modal
-# Override model or scheme (default scheme is FP8_DYNAMIC):
-make quantize-modal-block
-# or: modal run modal_quantize.py --model-id <org>/<model> --scheme FP8_BLOCK
+# Override model or scheme (defaults: EssentialAI/rnj-1-instruct + FP8_DYNAMIC):
+make quantize-modal MODEL=meta-llama/Meta-Llama-3-8B-Instruct SCHEME=FP8_BLOCK
+# or directly:
+modal run modal_quantize.py --model-id <org>/<model> --scheme <SCHEME>
 ```
 
 This:
 1. Spins up an H100 container on Modal
 2. Downloads the model (cached in a Modal Volume across runs)
 3. Runs `oneshot` quantization
-4. Saves the checkpoint to a Modal Volume
-5. **Downloads the checkpoint to your local `outputs/`** so you have a copy
+4. **Saves the checkpoint to a Modal Volume** (before the sanity-check generation, to avoid a slow offloaded save)
+5. Runs a sanity-check generation
+6. **Downloads the checkpoint to your local `outputs/`** so you have a copy
+
+### Re-download a checkpoint (no GPU cost)
+
+The checkpoint persists on the Modal volume, so if a download stalls or you want
+to pull a previously-quantized model without re-paying for quantization:
+
+```bash
+make download-modal
+# or for a specific model/scheme:
+make download-modal MODEL=EssentialAI/rnj-1-instruct SCHEME=FP8_DYNAMIC
+# or directly:
+modal run modal_quantize.py --download-only --model-id <org>/<model> --scheme <SCHEME>
+```
 
 ### Run inference on Modal
 
@@ -236,7 +251,7 @@ llm-compressor-quickstart/
 ├── requirements.txt       # pip-only fallback
 ├── .gitignore
 ├── quantize.py            # local quantization script (needs FP8 GPU)
-├── modal_quantize.py      # Modal: quantize on H100, download results
+├── modal_quantize.py      # Modal: quantize on H100 (+ --download-only to re-pull)
 ├── modal_inference.py     # Modal: run inference on L40S (or serve)
 ├── modal_verify.py        # Modal: generation + weight-size comparison
 ├── scripts/
@@ -265,6 +280,9 @@ vLLM's V1 engine JIT-compiles kernels at startup and needs the CUDA toolkit (`nv
 
 **`OSError: Repo id must be in the form 'repo_name'...`** *(Modal inference / verify)*
 The checkpoint directory name didn't match what the script looked for. Run `make results` to list what's in the volume, then pass `--model-name <dir>` — e.g. `...-FP8-BLOCK` vs the default `...-FP8-DYNAMIC`.
+
+**Modal `FunctionTimeoutError` during save** *(Modal quantize)*
+Quantization finished but `Saving checkpoint shards` stalled at 0% until the 30-min timeout. This happens when `save_pretrained` runs on a model with CPU-offloaded layers. `modal_quantize.py` now saves **before** the sanity-check dispatch to avoid this. If you customized the script and hit it again, make sure `save_pretrained` runs before `dispatch_model`. Either way the checkpoint is already on the volume — re-pull it free with `make download-modal`.
 
 ---
 
