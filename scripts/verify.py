@@ -15,9 +15,9 @@ import torch
 from huggingface_hub import snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-ORIGINAL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-QUANTIZED = Path("outputs") / "TinyLlama-1.1B-Chat-v1.0-FP8-Dynamic"
-PROMPT = "The capital of France is"
+ORIGINAL = "EssentialAI/rnj-1-instruct"
+QUANTIZED = Path("outputs") / "rnj-1-instruct-FP8-DYNAMIC"
+PROMPT = "The capital of Poland is"
 
 
 def weight_size_gb(path) -> float:

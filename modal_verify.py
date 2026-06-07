@@ -36,11 +36,10 @@ image = (
 )
 
 app = modal.App(image=image, name="llm-compressor-quickstart-verify")
-
-
+GPU = "H100"
 @app.function(
     image=image,
-    gpu="L40S",
+    gpu=GPU,
     timeout=10 * 60,
     volumes={
         "/root/.cache/huggingface": hf_cache_vol,
@@ -83,10 +82,22 @@ def verify(
     orig_size = weight_size_gb(orig_dir)
 
     quant_dir = f"/results/{model_name}"
-    if not Path(quant_dir).exists():
+    # Require actual weight files, not just the directory. A prior quantize
+    # run that crashed before `results_vol.commit()` (modal_quantize.py:151)
+    # can leave a stale snapshot where Path(...).exists() is True but no
+    # .safetensors/.bin ever landed -- transformers would then fail later
+    # with a confusing "no file named model.safetensors" error.
+    weight_files = (
+        list(Path(quant_dir).glob("*.safetensors"))
+        + list(Path(quant_dir).glob("*.bin"))
+        if Path(quant_dir).exists()
+        else []
+    )
+    if not weight_files:
         raise FileNotFoundError(
-            f"Quantized checkpoint not found at {quant_dir}. "
-            f"Run `modal run modal_quantize.py` first."
+            f"No weight files (.safetensors / .bin) found in {quant_dir}. "
+            f"The quantization either did not complete or was never run. "
+            f"Re-run `modal run modal_quantize.py`."
         )
     quant_size = weight_size_gb(quant_dir)
 
@@ -111,9 +122,9 @@ def verify(
 
 @app.local_entrypoint()
 def main(
-    model_id: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    model_name: str = "TinyLlama-1.1B-Chat-v1.0-FP8-DYNAMIC",
-    prompt: str = "The capital of France is",
+    model_id: str = "EssentialAI/rnj-1-instruct",
+    model_name: str = "rnj-1-instruct-FP8-DYNAMIC",
+    prompt: str = "The capital of Poland and Australia is",
     max_new_tokens: int = 20,
 ):
     print(

@@ -9,6 +9,9 @@ Run:
     modal run modal_quantize.py --model-id TinyLlama/TinyLlama-1.1B-Chat-v1.0
     modal run modal_quantize.py --scheme FP8_BLOCK
 
+    # Re-download a checkpoint without re-paying for quantization:
+    modal run modal_quantize.py --download-only
+
 Cost estimate (TinyLlama, H100 @ ~$3.50/hr):
     - Model download (~2 GB):  ~$0.05
     - Quantization (~30 s):    ~$0.05
@@ -33,7 +36,7 @@ import modal
 # ---------------------------------------------------------------------------
 
 GPU = "H100"
-TIMEOUT_SECONDS = 30 * 60  # 30 min hard cap
+TIMEOUT_SECONDS = 120 * 60  # 2 hr hard cap
 RESULTS_VOLUME_NAME = "llm-compressor-results"
 
 # Image: lean Debian base + everything LLM Compressor needs.
@@ -54,6 +57,46 @@ image = (
 app = modal.App(image=image, name="llm-compressor-quickstart")
 results_vol = modal.Volume.from_name(RESULTS_VOLUME_NAME, create_if_missing=True)
 hf_cache_vol = modal.Volume.from_name("hf-hub-cache", create_if_missing=True)
+
+
+# ---------------------------------------------------------------------------
+# Local helpers
+# ---------------------------------------------------------------------------
+
+
+def _save_name(model_id: str, scheme: str) -> str:
+    """Build the on-disk directory name for a quantized checkpoint."""
+    return f"{model_id.split('/')[-1]}-{scheme.replace('_', '-')}"
+
+
+def pull_from_volume(save_name: str, output_dir: str = "outputs") -> Path:
+    """Download a previously-quantized checkpoint from the Modal results volume.
+
+    Decoupled from `quantize` because the transfer is slow (multi-GB) and you
+    often want to re-run it on its own -- e.g. after an interrupted download or
+    to pull a checkpoint produced by an earlier run:
+
+        modal run modal_quantize.py --download-only \\
+            --model-id EssentialAI/rnj-1-instruct --scheme FP8_DYNAMIC
+    """
+    # Pass `output_dir` (the parent) -- NOT `output_dir / save_name` -- because
+    # `modal volume get SRC DEST` appends the remote dir name to DEST itself.
+    # Passing the nested path produced `outputs/<name>/<name>/...`.
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    local_dir = Path(output_dir) / save_name
+    print(f"Downloading checkpoint from volume to {local_dir}...")
+    # Volume.batch_download was removed in Modal 1.0; the CLI is now the
+    # recommended way to download a directory from a Volume. `--force` makes
+    # the call idempotent so interrupted downloads can be resumed.
+    subprocess.run(
+        [
+            sys.executable, "-m", "modal", "volume", "get",
+            RESULTS_VOLUME_NAME, save_name, str(output_dir),
+            "--force",
+        ],
+        check=True,
+    )
+    return local_dir
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +132,16 @@ def quantize(model_id: str, scheme: str) -> dict:
     )
     oneshot(model=model, recipe=recipe)
 
+    # Save BEFORE the sanity-check dispatch. dispatch_model() offloads layers
+    # to CPU, which makes save_pretrained() stall trying to re-materialize
+    # shards one at a time (this was hitting the 30-min Modal timeout).
+    save_name = _save_name(model_id, scheme)
+    save_dir = Path("/results") / save_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Saving to: {save_dir}")
+    model.save_pretrained(save_dir)
+    tokenizer.save_pretrained(save_dir)
+
     print("Running sanity-check generation...")
     dispatch_model(model)
     inputs = tokenizer("Hello, my name is", return_tensors="pt").input_ids.to(
@@ -97,13 +150,6 @@ def quantize(model_id: str, scheme: str) -> dict:
     output = model.generate(inputs, max_new_tokens=30)
     sample = tokenizer.decode(output[0])
     print(f"SAMPLE: {sample}")
-
-    save_name = f"{model_id.split('/')[-1]}-{scheme.replace('_', '-')}"
-    save_dir = Path("/results") / save_name
-    save_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Saving to: {save_dir}")
-    model.save_pretrained(save_dir)
-    tokenizer.save_pretrained(save_dir)
 
     # Persist the volume so the local entrypoint can read it back.
     hf_cache_vol.commit()
@@ -122,30 +168,31 @@ def quantize(model_id: str, scheme: str) -> dict:
 
 @app.local_entrypoint()
 def main(
-    model_id: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    model_id: str = "EssentialAI/rnj-1-instruct",
     scheme: str = "FP8_DYNAMIC",
     output_dir: str = "outputs",
+    download_only: bool = False,
 ):
+    save_name = _save_name(model_id, scheme)
+
+    if download_only:
+        local_dir = pull_from_volume(save_name, output_dir)
+        for f in sorted(local_dir.rglob("*")):
+            if f.is_file():
+                print(f"  {f}")
+        print(f"\nDownloaded to {local_dir}")
+        return
+
     print(f"Submitting job to Modal (GPU=H100, model={model_id}, scheme={scheme})...")
     result = quantize.remote(model_id, scheme)
     print(f"\nRemote sample generation:\n  {result['sample']}\n")
 
-    local_dir = Path(output_dir) / result["save_name"]
-    local_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {len(result['files'])} files to {local_dir}...")
-
-    # Pull the entire checkpoint directory off the volume via the Modal CLI.
-    # (Volume.batch_download was removed in Modal 1.0; the CLI is now the
-    # recommended way to download a directory from a Volume.)
-    subprocess.run(
-        [
-            sys.executable, "-m", "modal", "volume", "get",
-            RESULTS_VOLUME_NAME, result["save_name"], str(local_dir),
-        ],
-        check=True,
-    )
-
+    print(f"Saved {len(result['files'])} file(s) to volume:")
     for rel_path in result["files"]:
-        print(f"  {local_dir / rel_path}")
+        print(f"  /results/{result['save_name']}/{rel_path}")
 
-    print("\nDone. Next step: modal run modal_inference.py")
+    print(
+        "\nDone. Checkpoint lives on the Modal volume. To pull a local copy later:"
+        "\n  make download-modal"
+        "\nNext step: make verify-modal"
+    )
