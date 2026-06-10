@@ -61,6 +61,9 @@ quantize-modal-block: ## Quantize on Modal H100 with FP8_BLOCK scheme
 download-modal: ## Re-download a checkpoint from the volume (no GPU cost): make download-modal [MODEL=...] [SCHEME=...]
 	modal run modal_quantize.py --download-only --model-id $(MODEL) --scheme $(SCHEME)
 
+push-hf-modal: ## Push a quantized checkpoint to the HF Hub: make push-hf-modal REPO=owner/name [MODEL=...] [SCHEME=...]
+	modal run modal_push_hf.py --repo-id $(REPO) --model-id $(MODEL) --scheme $(SCHEME)
+
 # ---------------------------------------------------------------------------
 # Modal: inference (vLLM runs in the container, no local GPU needed)
 # ---------------------------------------------------------------------------
