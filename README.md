@@ -195,7 +195,9 @@ Weight size on disk:
 | Sanity-check generation | ~10 s | $0.01 |
 | **Total per run** | **~2 min** | **~$0.13** |
 
-A $30 credit gets you ~200+ quantization runs. Larger models (Llama-3-8B) take ~3–5 min and cost ~$0.30 each.
+A $30 credit gets you ~200+ TinyLlama quantization runs. Larger models take more:
+- **Llama-3-8B** (dense): ~3–5 min, ~$0.30 each
+- **Mellum2-12B-A2.5B-Thinking** (MoE, calibrated FP8): ~30–45 min, ~$2.00 each (512 samples × 2048 tokens calibration; see `MODEL_CARD.md`)
 
 ---
 
@@ -224,13 +226,15 @@ Edit `MODEL_ID` at the top of `quantize.py`:
 ```python
 MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"  # any HF causal LM
 ```
+For MoE models (e.g. `JetBrains/Mellum2-12B-A2.5B-Thinking`), use `modal_quantize.py` instead — it wraps the model load in `load_context()` to linearize experts, and uses calibration data. See `MODEL_CARD.md` for the Mellum2 example.
 
 ### Pick a different scheme
 Common alternatives (see [LLM Compressor docs](https://docs.vllm.ai/projects/llm-compressor/)):
 ```python
-scheme="FP8_BLOCK"      # block-wise FP8 weights (better accuracy, same HW)
-scheme="W4A16_ASYM"     # INT4 weights, FP16 activations (older GPUs OK)
-scheme="W8A8_INT8"      # INT8 weights + activations
+scheme="FP8_DYNAMIC"  # weights only, no calibration (simplest)
+scheme="FP8_BLOCK"    # block-wise FP8 weights (better accuracy, same HW)
+scheme="W4A16_ASYM"   # INT4 weights, FP16 activations (older GPUs OK)
+scheme="W8A8_INT8"    # INT8 weights + activations
 ```
 
 ### Skip more layers
@@ -250,10 +254,12 @@ llm-compressor-quickstart/
 ├── environment.yml        # conda-forge environment (recommended)
 ├── requirements.txt       # pip-only fallback
 ├── .gitignore
-├── quantize.py            # local quantization script (needs FP8 GPU)
-├── modal_quantize.py      # Modal: quantize on H100 (+ --download-only to re-pull)
-├── modal_inference.py     # Modal: run inference on L40S (or serve)
+├── quantize.py            # local quantization script (needs FP8 GPU; TinyLlama defaults)
+├── modal_quantize.py      # Modal: quantize on H100 with calibration (Mellum2 defaults; + --download-only)
+├── modal_discover.py      # Modal: inspect MoE layer names (CPU-only, ~$0.01)
+├── modal_inference.py     # Modal: run inference on H100 (or serve)
 ├── modal_verify.py        # Modal: generation + weight-size comparison
+├── modal_push_hf.py       # Modal: push a checkpoint to the HF Hub
 ├── scripts/
 │   └── verify.py          # extra: local HF-only checks (no vLLM)
 └── outputs/               # quantized checkpoints land here (gitignored)

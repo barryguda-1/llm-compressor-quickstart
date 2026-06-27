@@ -12,11 +12,11 @@ Setup (one-time):
            modal secret create huggingface HF_TOKEN=hf_xxx
 
 Run:
-    modal run modal_push_hf.py --repo-id <user>/rnj-1-instruct-FP8-DYNAMIC
+    modal run modal_push_hf.py --repo-id <user>/Mellum2-12B-A2.5B-Thinking-FP8
     modal run modal_push_hf.py \\
-        --model-id EssentialAI/rnj-1-instruct \\
-        --scheme FP8_DYNAMIC \\
-        --repo-id <user>/rnj-1-instruct-FP8-DYNAMIC \\
+        --model-id JetBrains/Mellum2-12B-A2.5B-Thinking \\
+        --scheme FP8 \\
+        --repo-id <user>/Mellum2-12B-A2.5B-Thinking-FP8 \\
         --private
 
 Prereq: a checkpoint must already exist on the results volume -- run
@@ -28,6 +28,8 @@ from pathlib import Path
 import modal
 
 RESULTS_VOLUME_NAME = "llm-compressor-results"
+MODEL_ID = "JetBrains/Mellum2-12B-A2.5B-Thinking"
+SCHEME = "FP8"
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -109,15 +111,15 @@ def push(save_name: str, repo_id: str, private: bool) -> dict:
 
 @app.local_entrypoint()
 def main(
-    model_id: str = "EssentialAI/rnj-1-instruct",
-    scheme: str = "FP8_DYNAMIC",
+    model_id: str = MODEL_ID,
+    scheme: str = SCHEME,
     repo_id: str = "",
     private: bool = False,
 ):
     if not repo_id or "/" not in repo_id:
         raise SystemExit(
             "--repo-id is required and must be of the form '<owner>/<name>', "
-            "e.g. --repo-id your-username/rnj-1-instruct-FP8-DYNAMIC"
+            "e.g. --repo-id your-username/Mellum2-12B-A2.5B-Thinking-FP8"
         )
 
     save_name = _save_name(model_id, scheme)

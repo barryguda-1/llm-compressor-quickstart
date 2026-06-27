@@ -15,9 +15,9 @@ import torch
 from huggingface_hub import snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-ORIGINAL = "EssentialAI/rnj-1-instruct"
-QUANTIZED = Path("outputs") / "rnj-1-instruct-FP8-DYNAMIC"
-PROMPT = "The capital of Poland is"
+ORIGINAL = "JetBrains/Mellum2-12B-A2.5B-Thinking"
+QUANTIZED = Path("outputs") / "Mellum2-12B-A2.5B-Thinking-FP8"
+PROMPT = "Is 1024 a power of 2? Explain briefly."
 
 
 def weight_size_gb(path) -> float:

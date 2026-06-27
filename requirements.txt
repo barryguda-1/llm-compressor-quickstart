@@ -7,10 +7,12 @@
 # where the image pip-installs vllm on an H100). The local `inference.py` will
 # not run without vLLM, so prefer modal_inference.py.
 
-llmcompressor==0.11.0
-compressed-tensors==0.16.0
-transformers>=4.45.0
+llmcompressor>=0.12.0
+compressed-tensors>=0.17.1
+transformers>=5.9.0
 accelerate>=1.0.0
+datasets>=4.8.4
+torchvision  # required by transformers v5 lazy-import chain
 safetensors
 sentencepiece
 modal==1.4.3

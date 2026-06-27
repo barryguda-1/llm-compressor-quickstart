@@ -5,18 +5,23 @@ channels:
 dependencies:
   - python=3.11
   - pip>=24.0
-  - pytorch>=2.4
+  - pytorch>=2.10.0
   - pytorch-cuda=12.4
-  - transformers>=4.45.0
-  - tokenizers>=0.20.0
+  - transformers>=5.9.0
+  - tokenizers>=0.22.0
   - sentencepiece
   - accelerate>=1.0.0
   - safetensors
   - numpy>=2.0,<3
   - pip:
-      - llmcompressor==0.11.0
-      - compressed-tensors==0.16.0
+      - llmcompressor>=0.12.0
+      - compressed-tensors>=0.17.1
+      - datasets>=4.8.4
       - modal==1.4.3
 # vLLM is intentionally NOT installed locally: no Windows wheels and it
 # hard-pins `compressed-tensors` to a version incompatible with llmcompressor.
 # Inference runs inside the Modal container instead (see modal_inference.py).
+#
+# Mellum2-12B-A2.5B-Thinking quantization requires llmcompressor >=0.12 for
+# `load_context()` (MoE linearization) and the new oneshot(dataset=...) API.
+# Without load_context, expert MLPs are invisible to the quantizer.
