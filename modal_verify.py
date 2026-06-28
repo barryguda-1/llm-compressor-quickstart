@@ -25,8 +25,8 @@ hf_cache_vol = modal.Volume.from_name("hf-hub-cache", create_if_missing=True)
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "transformers>=4.45.0",
-        "compressed-tensors==0.16.0",
+        "transformers>=5.8.1",
+        "compressed-tensors==0.17.1",
         "accelerate>=1.0.0",
         "safetensors",
         "sentencepiece",
@@ -39,6 +39,7 @@ app = modal.App(image=image, name="llm-compressor-quickstart-verify")
 GPU = "H100"
 @app.function(
     image=image,
+    secrets=[modal.Secret.from_name("huggingface")],
     gpu=GPU,
     timeout=10 * 60,
     volumes={
@@ -54,7 +55,7 @@ def verify(
 ) -> dict:
     import torch
     from huggingface_hub import snapshot_download
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer, Qwen3_5ForConditionalGeneration
 
     def weight_size_gb(path) -> float:
         """Sum of .safetensors + .bin weight files under a model dir (GB)."""
@@ -65,16 +66,34 @@ def verify(
         return total / 1e9
 
     def generate(model_src: str) -> str:
+        # Ornith is a multimodal qwen3_5 model. Load it with the SAME class
+        # modal_quantize.py uses to SAVE the checkpoint
+        # (Qwen3_5ForConditionalGeneration) so the /results/... quantized dir
+        # resolves correctly. AutoProcessor is intentionally avoided -- its
+        # image-processor auto-detection raises on this repo's
+        # preprocessor_config.json; AutoTokenizer is enough for text-only input
+        # (matches the quantize sanity-check pattern). The chat template is
+        # applied so the reasoning model runs in its trained <think>...</think> format.
         tokenizer = AutoTokenizer.from_pretrained(model_src)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_src, dtype=torch.float16, device_map="auto"
+        model = Qwen3_5ForConditionalGeneration.from_pretrained(
+            model_src, dtype=torch.bfloat16, device_map="auto"
         )
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        messages = [{"role": "user", "content": prompt}]
+        # Two-step tokenization (matches the model card quickstart): render the
+        # chat template to a STRING first, then tokenize. Passing
+        # apply_chat_template's tensor output straight into generate confuses
+        # its batch-size inference (AttributeError on .shape).
+        templated = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = tokenizer(templated, return_tensors="pt").to(model.device)
         out = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        text = tokenizer.decode(out[0], skip_special_tokens=True)
+        # Decode only the newly generated tokens (skip the prompt).
+        input_len = inputs["input_ids"].shape[-1]
+        generated = tokenizer.decode(out[0][input_len:], skip_special_tokens=True)
         del model
         torch.cuda.empty_cache()
-        return text
+        return generated
 
     # --- size comparison ---
     print(f"Resolving original snapshot for {model_id}...")
@@ -122,10 +141,10 @@ def verify(
 
 @app.local_entrypoint()
 def main(
-    model_id: str = "EssentialAI/rnj-1-instruct",
-    model_name: str = "rnj-1-instruct-FP8-DYNAMIC",
+    model_id: str = "deepreinforce-ai/Ornith-1.0-9B",
+    model_name: str = "Ornith-1.0-9B-FP8-DYNAMIC",
     prompt: str = "The capital of Poland and Australia is",
-    max_new_tokens: int = 20,
+    max_new_tokens: int = 4096,
 ):
     print(
         f"Submitting verify job to Modal "

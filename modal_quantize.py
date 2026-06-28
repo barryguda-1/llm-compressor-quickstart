@@ -43,10 +43,11 @@ RESULTS_VOLUME_NAME = "llm-compressor-results"
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "llmcompressor==0.11.0",
-        "compressed-tensors==0.16.0",
-        "transformers>=4.45.0",
-        "accelerate>=1.0.0",
+        "llmcompressor==0.12.0",
+        "compressed-tensors==0.17.1",
+        "transformers>=5.8.1",
+        "torchvision",
+        "accelerate>=1.13.0",
         "safetensors",
         "sentencepiece",
         "hf-transfer",
@@ -106,6 +107,7 @@ def pull_from_volume(save_name: str, output_dir: str = "outputs") -> Path:
 
 @app.function(
     image=image,
+    secrets=[modal.Secret.from_name("huggingface")],
     gpu=GPU,
     timeout=TIMEOUT_SECONDS,
     volumes={
@@ -115,20 +117,28 @@ def pull_from_volume(save_name: str, output_dir: str = "outputs") -> Path:
 )
 def quantize(model_id: str, scheme: str) -> dict:
     """Run LLM Compressor on `model_id` and write checkpoint to /results."""
+    import os
     from compressed_tensors.offload import dispatch_model
+    from compressed_tensors.utils import save_mtp_tensors_to_checkpoint
     from llmcompressor import oneshot
     from llmcompressor.modifiers.quantization import QuantizationModifier
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoProcessor, Qwen3_5ForConditionalGeneration  # multimodal class
+    import torch,os
 
     print(f"Loading model: {model_id}")
-    model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-
+    token = os.environ["HF_TOKEN"]
+    # Load Both text + vision via the multimodal class
+    model = Qwen3_5ForConditionalGeneration.from_pretrained(model_id, dtype=torch.bfloat16, token=token)
+    processor = AutoProcessor.from_pretrained(model_id, token=token)
     print(f"Applying scheme: {scheme}")
     recipe = QuantizationModifier(
         targets="Linear",
         scheme=scheme,
-        ignore=["lm_head"],
+        ignore=[
+            "lm_head",                # large vocab (248k), sensitive
+            "re:.*visual.*",          # vision tower -> kept at BF16
+            "re:.*linear_attn.*",     # hybrid Gated-DeltaNet projections
+        ],
     )
     oneshot(model=model, recipe=recipe)
 
@@ -140,16 +150,30 @@ def quantize(model_id: str, scheme: str) -> dict:
     save_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving to: {save_dir}")
     model.save_pretrained(save_dir)
-    tokenizer.save_pretrained(save_dir)
+    processor.save_pretrained(save_dir)
 
+    ## Carry MTP tensors over from the source checkpoint
+    #    (Qwen3_5ForConditionalGeneration excludes them on load).
+    #    Some checkpoints (e.g. Ornith) ship no MTP tensors — skip gracefully.
+    try:
+        save_mtp_tensors_to_checkpoint(source_model=model_id, dest_dir=save_dir)
+    except ValueError as e:
+        print(f"Skipping MTP copy — source has no MTP tensors: {e}")
     print("Running sanity-check generation...")
-    dispatch_model(model)
-    inputs = tokenizer("Hello, my name is", return_tensors="pt").input_ids.to(
-        model.device
-    )
-    output = model.generate(inputs, max_new_tokens=30)
-    sample = tokenizer.decode(output[0])
-    print(f"SAMPLE: {sample}")
+    sample = "<sanity check skipped>"
+    try:
+        dispatch_model(model)
+        # Text-only sanity check: use the tokenizer (not the multimodal processor),
+        # which would otherwise treat the string as an image source.
+        tok = processor.tokenizer
+        inputs = tok("Hello, my name is", return_tensors="pt").input_ids.to(model.device)
+        output = model.generate(inputs, max_new_tokens=30)
+        sample = tok.decode(output[0], skip_special_tokens=True)
+        print(f"SAMPLE: {sample}")
+    except Exception as e:
+        # The sanity check is informational only — never block the checkpoint
+        # from being committed (an earlier bug here lost whole quantization runs).
+        print(f"SAMPLE: skipped (sanity check failed: {e!r})")
 
     # Persist the volume so the local entrypoint can read it back.
     hf_cache_vol.commit()

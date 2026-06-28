@@ -2,8 +2,11 @@
 PYTHON       ?= python
 ENV_NAME     ?= llm-compressor-quickstart
 VOLUME       ?= llm-compressor-results
-MODEL        ?= EssentialAI/rnj-1-instruct
+MODEL        ?= deepreinforce-ai/Ornith-1.0-9B
+OUTPUT_MODEL ?= Ornith-1.0-9B-FP8-DYNAMIC
+OUTPUT_MODEL_DIR   ?= /results/$(OUTPUT_MODEL)
 SCHEME       ?= FP8_DYNAMIC
+HF_REPO      ?= barryke/$(OUTPUT_MODEL)
 
 # ---------------------------------------------------------------------------
 # Help
@@ -62,7 +65,7 @@ download-modal: ## Re-download a checkpoint from the volume (no GPU cost): make 
 	modal run modal_quantize.py --download-only --model-id $(MODEL) --scheme $(SCHEME)
 
 push-hf-modal: ## Push a quantized checkpoint to the HF Hub: make push-hf-modal REPO=owner/name [MODEL=...] [SCHEME=...]
-	modal run modal_push_hf.py --repo-id $(REPO) --model-id $(MODEL) --scheme $(SCHEME)
+	modal run modal_push_hf.py --repo-id $(HF_REPO) --model-id $(MODEL) --scheme $(SCHEME)
 
 # ---------------------------------------------------------------------------
 # Modal: inference (vLLM runs in the container, no local GPU needed)
@@ -70,13 +73,13 @@ push-hf-modal: ## Push a quantized checkpoint to the HF Hub: make push-hf-modal 
 
 .PHONY: inference-modal inference-modal-prompt serve-modal
 inference-modal: ## One-shot generation on Modal GPU
-	modal run modal_inference.py
+	modal run modal_inference.py --model-dir "$(OUTPUT_MODEL)"
 
 inference-modal-prompt: ## One-shot generation with a custom prompt: make inference-modal-prompt P="..."
 	modal run modal_inference.py --prompt "$(P)"
 
-serve-modal: ## Serve a live HTTP endpoint on Modal (billed while up)
-	modal run modal_inference.py --serve-mode
+serve-modal: ## Serve a live HTTP endpoint on Modal (billed while up): make serve-modal [OUTPUT_MODEL=...]
+	modal run modal_inference.py --serve-mode --model-dir "$(OUTPUT_MODEL)"
 
 # ---------------------------------------------------------------------------
 # Sanity checks
@@ -87,7 +90,7 @@ verify: ## Local HF-only check: generation + weight size (no vLLM; needs GPU)
 	$(PYTHON) scripts/verify.py
 
 verify-modal: ## Verify on Modal: generation + weight-size vs original
-	modal run modal_verify.py --model-name rnj-1-instruct-FP8-DYNAMIC
+	modal run modal_verify.py --model-name "$(OUTPUT_MODEL)" --model-id "$(MODEL)"
 # ---------------------------------------------------------------------------
 # Modal volume inspection
 # ---------------------------------------------------------------------------

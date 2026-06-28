@@ -28,8 +28,7 @@ image = (
         add_python="3.11",
     )
     .pip_install(
-        "vllm>=0.6.0",
-        "transformers>=4.45.0",
+        "vllm>=0.19.1",
         "hf-transfer",
     )
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
@@ -37,41 +36,85 @@ image = (
 
 app = modal.App(image=image, name="llm-compressor-quickstart-inference")
 GPU = "H100"
+
+
+def _extract_response(output) -> dict:
+    """Extract reasoning + answer from a vLLM CompletionOutput.
+
+    vLLM populates `reasoning_content` when a reasoning parser is active;
+    otherwise the <think> block stays inline in `.text`. Handle both, plus the
+    truncated case where generation ends before the closing </think>.
+    """
+    reasoning = (getattr(output, "reasoning_content", None) or "").strip()
+    answer = (output.text or "").strip()
+    if not reasoning and "</think>" in answer:
+        r, a = answer.split("</think>", 1)
+        reasoning = r.replace("<think>", "").strip()
+        answer = a.strip()
+    elif "<think>" in answer:
+        # Truncated mid-reasoning: no </think> yet — strip the opener and treat
+        # what we have as reasoning so the caller sees it isn't a real answer.
+        reasoning = answer.replace("<think>", "").strip()
+        answer = ""
+    return {"reasoning": reasoning, "answer": answer}
+
+
 @app.function(
     image=image,
     gpu=GPU,
-    timeout=10 * 60,
+    timeout=20 * 60,
     volumes={"/results": results_vol},
 )
 def generate(
     prompt: str = "Tell me a poem about Nairobi",
-    model_dir: str = "/results/rnj-1-instruct-FP8-DYNAMIC",
-    max_tokens: int = 50,
-    temperature: float = 0.0,
-) -> str:
-    """Load the quantized model in vLLM and return a single generation."""
+    model_dir: str = "/results/Ornith-1.0-9B-FP8-DYNAMIC",
+    max_tokens: int = 4096,
+    temperature: float = 0.6,
+) -> dict:
+    """Load the quantized model in vLLM and return reasoning + answer.
+
+    Ornith is a reasoning model: it emits a <think>...</think> block before the
+    final answer. We use llm.chat() so the model's chat template is applied,
+    and the model-card sampling defaults (temp=0.6, top_p=0.95, top_k=20).
+    max_tokens is generous because the reasoning trace alone can run long.
+    """
     from vllm import LLM, SamplingParams
 
     print(f"Loading vLLM model from {model_dir}...")
-    llm = LLM(model=model_dir, dtype="auto", enforce_eager=True)
+    llm = LLM(model=model_dir, dtype="auto", enforce_eager=True, trust_remote_code=True)
 
-    sampling = SamplingParams(temperature=temperature, max_tokens=max_tokens)
-    outputs = llm.generate([prompt], sampling)
-    return outputs[0].outputs[0].text
+    sampling = SamplingParams(
+        temperature=temperature, top_p=0.95, top_k=20, max_tokens=max_tokens
+    )
+    messages = [{"role": "user", "content": prompt}]
+    outputs = llm.chat(messages, sampling)
+    return _extract_response(outputs[0].outputs[0])
 
-@app.function(image=image, gpu=GPU)
+@app.function(image=image, gpu=GPU, volumes={"/results": results_vol})
 @modal.web_server(port=8000, startup_timeout=120)
 def serve():
-    """Long-lived web endpoint. Hit /generate with JSON: {"prompt": "..."}."""
+    """Long-lived web endpoint. Hit /generate with JSON: {"prompt": "..."}.
+
+    The model is chosen via the INFERENCE_MODEL_DIR env var (set from the
+    local entrypoint through `serve.with_options(env=...)`), defaulting to the
+    rnj-1 checkpoint. `@modal.web_server` functions must be nullary, so the
+    model can't be a regular parameter — env-var injection is the workaround.
+    """
     import json
+    import os
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     from vllm import LLM, SamplingParams
 
+    model_dir = os.environ.get(
+        "INFERENCE_MODEL_DIR", "/results/Ornith-1.0-9B-FP8-DYNAMIC"
+    )
+    print(f"Loading vLLM model from {model_dir}...")
     llm = LLM(
-        model="/results/rnj-1-instruct-FP8-DYNAMIC",
+        model=model_dir,
         dtype="auto",
+        trust_remote_code=True,
     )
 
     class Handler(BaseHTTPRequestHandler):
@@ -80,11 +123,14 @@ def serve():
             body = json.loads(self.rfile.read(length) or b"{}")
             prompt = body.get("prompt", "")
             params = SamplingParams(
-                temperature=body.get("temperature", 0.0),
-                max_tokens=body.get("max_tokens", 100),
+                temperature=body.get("temperature", 0.6),
+                top_p=0.95,
+                top_k=20,
+                max_tokens=body.get("max_tokens", 4096),
             )
-            out = llm.generate([prompt], params)[0].outputs[0].text
-            payload = json.dumps({"output": out}).encode()
+            messages = [{"role": "user", "content": prompt}]
+            out = llm.chat(messages, params)[0].outputs[0]
+            payload = json.dumps(_extract_response(out)).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -101,19 +147,20 @@ def serve():
 @app.local_entrypoint()
 def main(
     prompt: str = "Share with me a poem about Nairobi",
-    model_name: str = "rnj-1-instruct-FP8-DYNAMIC",
-    max_tokens: int = 50,
+    model_dir: str = "Ornith-1.0-9B-FP8-DYNAMIC",
+    max_tokens: int = 4096,
     serve_mode: bool = False,
 ):
+    remote_model_dir = f"/results/{model_dir}"
     if serve_mode:
-        print("Starting web server... press Ctrl+C to stop.")
-        serve.remote()
+        print(f"Starting web server with model {remote_model_dir}... press Ctrl+C to stop.")
+        serve.with_options(env={"INFERENCE_MODEL_DIR": remote_model_dir}).remote()
         return
 
-    remote_model_dir = f"/results/{model_name}"
     print(f"Running on Modal {GPU} with prompt: {prompt!r}")
     output = generate.remote(
         prompt=prompt, model_dir=remote_model_dir, max_tokens=max_tokens
     )
-    print(f"\nOutput: {output}")
+    print(f"\nReasoning:\n{output['reasoning']}")
+    print(f"\nAnswer:\n{output['answer']}")
 
